@@ -7,6 +7,7 @@ dist
 .tox
 .coverage
 htmlcov
+.vscode
 
 syntax: glob
 *.pyc
