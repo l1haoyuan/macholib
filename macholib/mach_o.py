@@ -435,6 +435,12 @@ class load_command(Structure):
 
     def get_cmd_name(self):
         return LC_NAMES.get(self.cmd, self.cmd)
+    
+    def __hash__(self):
+        return hash(self.cmd)
+
+    def __eq__(self, other):
+        return self is other
 
 
 LC_REQ_DYLD = 0x80000000

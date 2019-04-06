@@ -165,6 +165,8 @@ class MachOHeader(object):
     #   total_size - the current mach-o header size (including header)
     #   low_offset - essentially, the maximum mach-o header size
     #   id_cmd     - the index of my id command, or None
+    #   mod_dict   - a dict of lc/cmd/data which is modified, would be written
+    #                back to file when write() is called
 
     def __init__(self, parent, fh, offset, size, magic, hdr, endian):
         self.MH_MAGIC = magic
@@ -184,6 +186,8 @@ class MachOHeader(object):
         self.low_offset = None
         self.filetype = None
         self.headers = []
+
+        self.mod_dict = {}
 
         self.load(fh)
 
@@ -272,11 +276,11 @@ class MachOHeader(object):
             #    fh.seek(cmd_cmd.dataoff)
             #    cmd_data = fh.read(cmd_cmd.datasize)
             #    fh.seek(c)
-            # elif cmd_load.cmd == LC_SYMTAB:
-            #    c = fh.tell()
-            #    fh.seek(cmd_cmd.stroff)
-            #    cmd_data = fh.read(cmd_cmd.strsize)
-            #    fh.seek(c)
+            elif cmd_load.cmd == LC_SYMTAB:
+               c = fh.tell()
+               fh.seek(cmd_cmd.stroff)
+               cmd_data = fh.read(cmd_cmd.strsize)
+               fh.seek(c)
 
             else:
                 # data is a raw str
@@ -367,36 +371,89 @@ class MachOHeader(object):
         # serialize all the mach-o commands
         self.synchronize_size()
 
-        self.header.to_fileobj(fileobj)
+        # self.header.to_fileobj(fileobj)
         for lc, cmd, data in self.commands:
-            lc.to_fileobj(fileobj)
-            cmd.to_fileobj(fileobj)
+            if lc not in self.mod_dict:
+                continue
 
-            if sys.version_info[0] == 2:
-                if isinstance(data, unicode):
-                    fileobj.write(data.encode(sys.getfilesystemencoding()))
+            changed_arr = self.mod_dict[lc]
+            for changed in changed_arr:
+                if changed is lc:
+                    lc.to_fileobj(fileobj)
 
-                elif isinstance(data, (bytes, str)):
-                    fileobj.write(data)
-                else:
-                    # segments..
-                    for obj in data:
-                        obj.to_fileobj(fileobj)
-            else:
-                if isinstance(data, str):
-                    fileobj.write(data.encode(sys.getfilesystemencoding()))
+                elif changed is cmd:
+                    cmd.to_fileobj(fileobj)
+                
+                elif changed is data:
+                    if lc.cmd == LC_SYMTAB:
+                        c = fileobj.tell()
+                        fileobj.seek(cmd.stroff)
+                        fileobj.write(data)
+                        fileobj.seek(c)
+                    elif isinstance(data, str):
+                        fileobj.write(data.encode(sys.getfilesystemencoding()))
 
-                elif isinstance(data, bytes):
-                    fileobj.write(data)
+                    elif isinstance(data, bytes):
+                        fileobj.write(data)
 
-                else:
-                    # segments..
-                    for obj in data:
-                        obj.to_fileobj(fileobj)
+                elif changed in data:
+                    not_zerofill = ((changed.flags & S_ZEROFILL) != S_ZEROFILL)
+                    if not_zerofill:
+                        c = fileobj.tell()
+                        fileobj.seek(changed.offset)
+                        fileobj.write(changed.section_data)
+                        fileobj.seek(c)
+
+                    # for obj in data:
+                    #     obj.to_fileobj(fileobj)
+                    #     not_zerofill = (
+                    #         (obj.flags & S_ZEROFILL) != S_ZEROFILL)
+                    #     if not_zerofill:
+                    #         c = fileobj.tell()
+                    #         fileobj.seek(obj.offset)
+                    #         fileobj.write(obj.section_data)
+                    #         fileobj.seek(c)
+
+            # lc.to_fileobj(fileobj)
+            # cmd.to_fileobj(fileobj)
+
+            # if sys.version_info[0] == 2:
+            #     if isinstance(data, unicode):
+            #         fileobj.write(data.encode(sys.getfilesystemencoding()))
+
+            #     elif isinstance(data, (bytes, str)):
+            #         fileobj.write(data)
+            #     else:
+            #         # segments..
+            #         for obj in data:
+            #             obj.to_fileobj(fileobj)
+            #             not_zerofill = ((obj.flags & S_ZEROFILL) != S_ZEROFILL)
+            #             if not_zerofill:
+            #                 c = fileobj.tell()
+            #                 fileobj.seek(obj.offset)
+            #                 fileobj.write(obj.section_data)
+            #                 fileobj.seek(c)
+            # else:
+            #     if isinstance(data, str):
+            #         fileobj.write(data.encode(sys.getfilesystemencoding()))
+
+            #     elif isinstance(data, bytes):
+            #         fileobj.write(data)
+
+            #     else:
+            #         # segments..
+            #         for obj in data:
+            #             obj.to_fileobj(fileobj)
+            #             not_zerofill = ((obj.flags & S_ZEROFILL) != S_ZEROFILL)
+            #             if not_zerofill:
+            #                 c = fileobj.tell()
+            #                 fileobj.seek(obj.offset)
+            #                 fileobj.write(obj.section_data)
+            #                 fileobj.seek(c)
 
         # zero out the unused space, doubt this is strictly necessary
         # and is generally probably already the case
-        fileobj.write(b'\x00' * (self.low_offset - fileobj.tell()))
+        # fileobj.write(b'\x00' * (self.low_offset - fileobj.tell()))
 
     def getSymbolTableCommand(self):
         for lc, cmd, data in self.commands:
